@@ -183,35 +183,32 @@ tfctx *create_context() {
 
 // ============= COMPILING AND PARSING =============
 
+// Increase parser's p (aka the next token) and line_offset
 void incr_parser_token(tfparser *parser) {
 	parser->p++;
 	parser->line_offset++;
 }
-
+ // Skip whitespaces and comments (#...\n)
 void skip_trivia(tfparser *parser) {
-	int debug = 0;
-	if (debug==1) printf("##### SKIP TRIVIA #####\n");
-	
-	// Skip spaces
-	while (isspace(parser->p[0])) {incr_parser_token(parser);}
+	while (1) {
+		// Skip whitespaces
+		while (parser->p[0] && isspace((unsigned char)parser->p[0])) {
+			// Manage newlines correctly
+			if (parser->p[0] == '\n') {
+				parser->p++;
+				parser->line_offset = 1;
+				parser->line++;
+			} else incr_parser_token(parser);
+		}
 
-	if (debug==1) printf("line: %d, offset: %d\n",parser->line, parser->line_offset);
-	
-	// Skip comments (marked by # and ending with '\n') 
-	if (parser->p[0] == '#') {
-		incr_parser_token(parser);
-		while (parser->p[0] != '\n') {incr_parser_token(parser);}
-	}
+		if (parser->p[0] == '#') {
+			while (parser->p[0] && parser->p[0] != '\n') {incr_parser_token(parser);}
+			continue;
+		}
 
-	// Skip newlines 
-	if (parser->p[0] == '\n') {
-		incr_parser_token(parser);
-		parser->line++;
-		parser->line_offset = 1;
+		break;
 	}
-	if (debug==1) printf("##### /SKIP TRIVIA #####\n");
 };
-
 
 
 #define MAX_NUM_LEN 128
@@ -268,13 +265,14 @@ tfobj *parse_strings(tfparser *parser) {
 	 * o se comparare a stringhe parser->p
 	 * (ammesso e non concesso che sia davvero così)
 	 */
+
 	// Check: "...
-	if (strcmp(start, string_marker) || !(strcmp(parser->p[0], string_marker))) {
+	if (strcmp(start, string_marker) || !(strcmp(parser->p, string_marker))) {
 		parser->p++;
 	
 	// Check: "..."
-	} else if (strcmp(start, string_marker) && (strcmp(parser->p[0], string_marker))) {
-		end = parser->p[0];
+	} else if (strcmp(start, string_marker) && (strcmp(parser->p, string_marker))) {
+		end = parser->p;
 		parser->p++;
 	
 	// Check: ...
@@ -282,24 +280,19 @@ tfobj *parse_strings(tfparser *parser) {
 	// --------------------
 	
 	len = end-start;
+	if (len >= MAX_STRING_LEN) return o; // String is too big
 
-	if (len >= MAX_STRING_LEN) return o;
-
-	/* Cut off the "" markers
-	 * and reduce the needed allocated space to the bare minimum
-	 */
-	// NEEDED MEMORY SPACE = MAX_STRING_LEN-(MAX_STRING_LEN-x)
+	// Cut off the "" markers and reduce the needed allocated space to the bare minimum
 	memcpy(buf, start+1, MAX_STRING_LEN-(MAX_STRING_LEN-len)-1);
 	buf[len] = 0;
 
 	o = create_string_object(buf, len);
-
 	return o;
 };
 
 
-#define MAX_KEYWORD_LEN 6 // Symbols can be of max 5 characters
-int issymbol(char *word, size_t len) {
+#define MAX_KEYWORD_LEN 6 // Symbols can be max 5 characters long
+int issymbol(char *word) {
 
 	// --- INITIALIZE KEYWORDS AND SYMBOLS ---
 	const char *keywords[] = {
@@ -324,32 +317,27 @@ int issymbol(char *word, size_t len) {
 	const char *symbols[] = {"+*-/()[]{}"};
 	// ---------------------------------------
 
-	for (size_t i=0; i < len; i++) {
-
-		// Check if WORD is a symbol
-		if (word[i] == symbols[i]) {return 0;}
-
-		// Check if WORD is a keyword
-		else if (word == keywords[i]) {return 0;}
-
-		else return 1;
+	for (size_t i=0; i < MAX_KEYWORD_LEN; i++) {
+		// Check if WORD is a either a symbol or keyword 
+		if (strchr(word, (int)symbols[i]) || strcmp(word, keywords[i])) return 0;
 	}
 
 	/*
 	return 1 // false
 	return 0 // true
 	*/
+	return 1;
 };
 
 tfobj *parse_symbol(tfobj *parser) {
 	
-	char keyword;
+	char *k; //keyword
 	size_t i;
 
 	tfobj *o = NULL;
 
 
-	o = create_symbol_object(keyword, i);
+	o = create_symbol_object(k, i);
 
 	return o;
 };
@@ -389,6 +377,7 @@ tfobj *compile(char *prg) {
 		}
 		
 	}
+	free(parser);
 	return parsed;
 };
 
@@ -404,11 +393,11 @@ void exec(tfobj *prg) {
 		// --- Object must be appended to latest position in stack
 		case TFOBJ_TYPE_BOOL:
 		case TFOBJ_TYPE_INT:
-			append(ctx->stack, prg->i);
+			append(ctx->stack, prg->i); // FIXME
 			break;
 
 		case TFOBJ_TYPE_STRING:
-			append(ctx->stack, prg->list.ele);
+			append(ctx->stack, prg->list.ele[0]); // boh forse se metto ele[0] creerà dei bug??
 			break;
 
 		case TFOBJ_TYPE_SYMBOL:
@@ -454,6 +443,7 @@ void print_prg(tfobj *prg) {
 
 int main(int argc, char **argv) {
 
+	// ========== READ FROM FILE ==============
 	if (argc < 2) {fprintf(stderr, "Usage: %s <filename>\n", *argv); return 1;}
 
 	// Read the program in memory, for later parsing
@@ -475,15 +465,16 @@ int main(int argc, char **argv) {
 	prgtext[filesize] = 0; // Add null term to the end of the array
 	fclose(fp);
 
-	printf("---\n");
-	printf("Program text: |%s|\n", prgtext);
-	printf("---\n");
-	
+	printf("---\nProgram text:\n|%s|\n---\n", prgtext);
 
-	// --------
+
+	// =============== COMPILE AND EXECUTE ===================
 	tfobj *prg = compile(prgtext);
 
 	print_prg(prg);
+
+	// preparativi per chiudere il programma
+	destroy_tfobject(prg);
 
 	return 0;
 }
@@ -499,4 +490,8 @@ int main(int argc, char **argv) {
 
 /*
 Mi sa che droppo perché non ci sto più capendo un cazzo
+*/
+
+/*
+Forse ci sto capendo qualcosa
 */

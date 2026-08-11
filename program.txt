@@ -1,3 +1,23 @@
-#6 -7 +
-1
-"Hello, World!"
+# ---- COSE CHE IL PROGRAMMA CAPISCE
+# commenti a inizio/fine frase
+# commenti a fine file
+# linee vuote
+
+# numeri
+6 +8889 -7 987654321098765432109876543210 #prova prova 123
+
+# --- TO TEST:
+# - STRINGHE
+#"Hello, World!" 
+
+# - BOOL
+#0 1 1
+
+# - SYMBOLS
+#+ dup print
+
+# ------------
+
+# CODICE DI PROVA:
+#reset 
+#5 dup * print # risultato = 25
