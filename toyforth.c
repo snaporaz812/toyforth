@@ -22,7 +22,7 @@ typedef struct tfobj{
 
 	union {
 		// INT and BOOL
-		int i;
+		int i; // FIXME: ma non è che dovrei farlo signed int forse???
 
 		// STRING and SYMBOL
 		struct {
@@ -90,11 +90,18 @@ void destroy_tfobject(tfobj *o) {
 	} else free(o); // refcount == 0 --> tfobj gets destroyed
 };
 
+tfobj *create_text_object(char *s, size_t len, int type) {
+	tfobj *o = create_object(type);
+	o->str.ptr = xmalloc(len+1);
+	memcpy(o->str.ptr, s, len);
+	o->str.ptr[len] = 0;
+	o->str.len = len;
+
+	return o;	
+};
 
 tfobj *create_string_object(char *s, size_t len) {
-	tfobj *o = create_object(TFOBJ_TYPE_STRING);
-	o->str.ptr = s;
-	o->str.len = len;
+	tfobj *o = create_text_object(s, len, TFOBJ_TYPE_STRING);
 	return o;
 };
 
@@ -112,9 +119,7 @@ tfobj *create_bool_object(int i){
 
 
 tfobj *create_symbol_object(char *s, size_t len) {
-	tfobj *o = create_object(TFOBJ_TYPE_SYMBOL);
-	o->str.ptr = s;
-	o->str.len = len;
+	tfobj *o = create_text_object(s, len, TFOBJ_TYPE_SYMBOL);
 	return o;
 };
 
@@ -257,46 +262,42 @@ tfobj *parse_strings(tfparser *parser) {
 	char *end;
 	size_t len;
 	tfobj *o = NULL;
-	char *string_marker = (char*)STRING_CHAR;
+	// define the charachter that will be checked for as the start of a string: " 
+	char string_marker = (char)STRING_CHAR;
 
-	// --------------------
-	/* Non sono sicuro di come funziona questo blocco.
-	 * Non so se conviene comparare carattere per carattere con parser->p[0]
-	 * o se comparare a stringhe parser->p
-	 * (ammesso e non concesso che sia davvero così)
-	 */
+	// Check for: " 
+	if (*start == string_marker) {
+		//printf("AAAAAA *start: %c, Current token: %c\n", *start, parser->p[0]); //debug
+		incr_parser_token(parser);
 
-	// Check: "...
-	if (strcmp(start, string_marker) || !(strcmp(parser->p, string_marker))) {
-		parser->p++;
-	
-	// Check: "..."
-	} else if (strcmp(start, string_marker) && (strcmp(parser->p, string_marker))) {
-		end = parser->p;
-		parser->p++;
-	
-	// Check: ...
+		while (parser->p[0] != string_marker) {
+			//printf("BBBBBB *start: %c, Current token: %c\n", *start, parser->p[0]); //debug
+			end = parser->p;
+			incr_parser_token(parser);
+		}
+		incr_parser_token(parser); // Skip closing quotation mark 
 	} else return o;
-	// --------------------
 	
-	len = end-start;
+	len = end-start; // Don't count opening quotation mark // Hello World = 11
 	if (len >= MAX_STRING_LEN) return o; // String is too big
 
-	// Cut off the "" markers and reduce the needed allocated space to the bare minimum
-	memcpy(buf, start+1, MAX_STRING_LEN-(MAX_STRING_LEN-len)-1);
+	// Allocate the needed space (= string+'\0')
+	memcpy(buf, start+1, len+1); // Cut off opening quotation mark
 	buf[len] = 0;
+
+	//printf("CCCCCC *end: %c, buf: %s, len: %zu\n", *end, buf, len); //debug
 
 	o = create_string_object(buf, len);
 	return o;
 };
 
 
-#define MAX_KEYWORD_LEN 6 // Symbols can be max 5 characters long
+#define MAX_KEYWORD_LEN 5 // Symbols can be max 5 characters long
 int issymbol(char *word) {
 
 	// --- INITIALIZE KEYWORDS AND SYMBOLS ---
 	const char *keywords[] = {
-	// len = 4
+	// len = 3
 	"dup",		// duplicate
 	"add",		// add
 	"sub",		// subtract
@@ -306,39 +307,75 @@ int issymbol(char *word) {
 	"var",		// variable
 	"del",		// delete
 
-	// len = 5
+	// len = 4
 	"func",		// function
 
-	// len = 6
+	// len = 5
 	"print",	// print
-	"reset"		// reset
+	"reset",		// reset
+	NULL
 	};
 
-	const char *symbols[] = {"+*-/()[]{}"};
+	const char symbols[] = {"+*-/()[]{}"};
 	// ---------------------------------------
 
-	for (size_t i=0; i < MAX_KEYWORD_LEN; i++) {
-		// Check if WORD is a either a symbol or keyword 
-		if (strchr(word, (int)symbols[i]) || strcmp(word, keywords[i])) return 0;
+	// Check punctuation
+	size_t i = 0;
+	while (symbols[i]) {
+		if (strchr(word, (int)symbols[i])) {
+			//printf("*** Punctuation: %s. issymbol = true, i=%zu\n", word,i); //debug
+			return 1;
+		}
+			i++;
+	}
+
+	// Check keyword 
+	i = 0;
+	while (keywords[i]) {
+		if (strcmp(word, keywords[i]) == 0) {
+			//printf("*** Keyword: %s. issymbol = true, i=%zu\n", word,i); //debug
+			return 1;
+		}
+		i++;
 	}
 
 	/*
-	return 1 // false
-	return 0 // true
+	return 0 // false
+	return 1 // true
 	*/
-	return 1;
+	//printf("*** isymbol = false\n"); //debug
+	return 0;
 };
 
-tfobj *parse_symbol(tfobj *parser) {
-	
-	char *k; //keyword
-	size_t i;
 
+tfobj *parse_symbols(tfparser *parser) {
+	
+	char buf[MAX_KEYWORD_LEN];
+	char *start = parser->p;
+	char *end;
+	size_t len;
 	tfobj *o = NULL;
 
 
-	o = create_symbol_object(k, i);
+	// Extract the string to be evaluated
+	while (isalpha(parser->p[0]) || ispunct(parser->p[0])) {
+		end = parser->p;
+		incr_parser_token(parser);
+	}
 
+	len = end-start+1;
+	if (len > MAX_KEYWORD_LEN) return o; // Keyword is too big 
+
+	memcpy(buf, start, len+1); // allocate space for string + null term
+	buf[len] = 0;
+
+	//printf("SSSSSS buf: %s, len: %zu\n", buf, len); // debug
+
+	// Check if string is a SYMBOL
+	if (issymbol(buf)) {
+		//printf("parse_symbols buf: %s\n", buf); //debug
+		o = create_symbol_object(buf, len);
+	}
 	return o;
 };
 
@@ -346,30 +383,34 @@ tfobj *parse_symbol(tfobj *parser) {
 tfobj *compile(char *prg) {
 	tfparser *parser = create_tfparser(prg);
 	tfobj *parsed = create_list_object();
-	tfobj *o = NULL;
 
 	// This cycle goes on as long as there are elements in the array parser->p[]
 	while (parser->p) {
+		tfobj *o = NULL;
 		char *parse_token_start = parser->p;
 		
 		skip_trivia(parser);
 
 		if (parser->p[0] == 0) break; // End of Program reached
 
-		// Parse symbols
+		// Parse strings if quotation mark (") is found
+		if (parser->p[0] == (char)STRING_CHAR) o = parse_strings(parser);
 
 		// Parse numbers (either signed or unsigned)
 		if (isdigit(parser->p[0]) ||
-			((parser->p[0] == '+' || parser->p[0] == '-') && isdigit(parser->p[1]))) {o = parse_numbers(parser);}
-		else o = NULL;
+			((parser->p[0] == '+' || parser->p[0] == '-') && isdigit(parser->p[1]))) o = parse_numbers(parser);
 
 		// Parse booleans
 
-		// check for errors when token was being parsed
+		// Parse symbols
+		if (isalpha(parser->p[0]) || ispunct(parser->p[0])) o = parse_symbols(parser); 
+		
+		
+		// Check for errors when token was being parsed
 		if (o == NULL) {
-			printf("---!!!---\n");
-			fprintf(stderr, "Syntax error at line %d, col %d: \n|%16s|\n", parser->line, parser->line_offset, parse_token_start);
-			printf("---!!!---\n");
+			printf("\t---!!!---\n");
+			fprintf(stderr, "\tSyntax error at line %d, col %d: \n|%8s|\n", parser->line, parser->line_offset, parse_token_start);
+			printf("\t---!!!---\n");
 			//return NULL;
 			exit(1);
 		} else {
@@ -386,31 +427,25 @@ void exec(tfobj *prg) {
 	//Initialize stack instance
 	tfctx *ctx = create_context(); //
 
-
 	while (ctx->stack->list.ele) {
 		switch (prg->type) {
 
 		// --- Object must be appended to latest position in stack
 		case TFOBJ_TYPE_BOOL:
 		case TFOBJ_TYPE_INT:
-			append(ctx->stack, prg->i); // FIXME
-			break;
-
-		case TFOBJ_TYPE_STRING:
-			append(ctx->stack, prg->list.ele[0]); // boh forse se metto ele[0] creerà dei bug??
-			break;
-
 		case TFOBJ_TYPE_SYMBOL:
-			// 
+		case TFOBJ_TYPE_STRING:
+			append(ctx->stack, prg);
 			break;
 
 		case TFOBJ_TYPE_LIST:
 			// manage functions (which are lists of operations)
-			exec(prg->list.ele); // recursive
+			for (size_t i=0; i < prg->list.len; i++) exec(prg->list.ele[i]); // recursive
 			break;
 
 		default:
 			fprintf(stderr, "Runtime error");
+			exit(1);
 		}
 	}
 };
@@ -427,9 +462,13 @@ void print_prg(tfobj *prg) {
 			break;
 
 		case TFOBJ_TYPE_STRING:
-		case TFOBJ_TYPE_SYMBOL:
-			printf("%s", ele->str.ptr);
+			printf("\"%s\"", ele->str.ptr);
 			break;
+
+		case TFOBJ_TYPE_SYMBOL:
+			printf("%s", ele->str.ptr); 
+			break;
+
 		case TFOBJ_TYPE_LIST:
 			print_prg(ele); // Recursive call
 		}
@@ -465,7 +504,7 @@ int main(int argc, char **argv) {
 	prgtext[filesize] = 0; // Add null term to the end of the array
 	fclose(fp);
 
-	printf("---\nProgram text:\n|%s|\n---\n", prgtext);
+	printf("---\nProgram text:\n|%s|\n---\n\n", prgtext);
 
 
 	// =============== COMPILE AND EXECUTE ===================
