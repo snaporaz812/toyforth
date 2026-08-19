@@ -1,2 +1,7 @@
+all: toyforth
+
 toyforth: toyforth.c
-	$(CC) toyforth.c -o toyforth -W -Wall -std=c2x
+	$(CC) toyforth.c -Wall -W -O2 -std=c2x -o toyforth
+
+clean:
+	rm -rf toyforth
